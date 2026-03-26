@@ -1,0 +1,162 @@
+---
+version: '2'
+
+x-hadoop-env: &hadoop_env
+  "CORE-SITE.XML_fs.default.name": "hdfs://namenode"
+  "CORE-SITE.XML_fs.defaultFS": "hdfs://namenode"
+  "HDFS-SITE.XML_dfs.namenode.rpc-address": "namenode:8020"
+  "HDFS-SITE.XML_dfs.webhdfs.enabled": "true"
+  "HDFS-SITE.XML_dfs.permissions": "false"
+  "HDFS-SITE.XML_dfs.replication": "1"
+  "MAPRED-SITE.XML_mapreduce.framework.name": "yarn"
+  "MAPRED-SITE.XML_yarn.app.mapreduce.am.env": "HADOOP_MAPRED_HOME=$$HADOOP_HOME"
+  "MAPRED-SITE.XML_mapreduce.map.env": "HADOOP_MAPRED_HOME=$$HADOOP_HOME"
+  "MAPRED-SITE.XML_mapreduce.reduce.env": "HADOOP_MAPRED_HOME=$$HADOOP_HOME"
+  "YARN-SITE.XML_yarn.resourcemanager.hostname": "resourcemanager"
+  "YARN-SITE.XML_yarn.nodemanager.pmem-check-enabled": "false"
+  "YARN-SITE.XML_yarn.nodemanager.delete.debug-delay-sec": "600"
+  "YARN-SITE.XML_yarn.nodemanager.vmem-check-enabled": "false"
+  "YARN-SITE.XML_yarn.nodemanager.aux-services": "mapreduce_shuffle"
+  "CAPACITY-SCHEDULER.XML_yarn.scheduler.capacity.maximum-applications": "10000"
+  "CAPACITY-SCHEDULER.XML_yarn.scheduler.capacity.maximum-am-resource-percent": "0.1"
+  "CAPACITY-SCHEDULER.XML_yarn.scheduler.capacity.resource-calculator": "org.apache.hadoop.yarn.util.resource.DefaultResourceCalculator"
+  "CAPACITY-SCHEDULER.XML_yarn.scheduler.capacity.root.queues": "default"
+  "CAPACITY-SCHEDULER.XML_yarn.scheduler.capacity.root.default.capacity": "100"
+  "CAPACITY-SCHEDULER.XML_yarn.scheduler.capacity.root.default.user-limit-factor": "1"
+  "CAPACITY-SCHEDULER.XML_yarn.scheduler.capacity.root.default.maximum-capacity": "100"
+  "CAPACITY-SCHEDULER.XML_yarn.scheduler.capacity.root.default.state": "RUNNING"
+  "CAPACITY-SCHEDULER.XML_yarn.scheduler.capacity.root.default.acl_submit_applications": "*"
+  "CAPACITY-SCHEDULER.XML_yarn.scheduler.capacity.root.default.acl_administer_queue": "*"
+  "CAPACITY-SCHEDULER.XML_yarn.scheduler.capacity.node-locality-delay": "40"
+  "CAPACITY-SCHEDULER.XML_yarn.scheduler.capacity.queue-mappings": ""
+  "CAPACITY-SCHEDULER.XML_yarn.scheduler.capacity.queue-mappings-override.enable": "false"
+
+services:
+  namenode:
+    image: apache/hadoop:3
+    hostname: namenode
+    command: ["hdfs", "namenode"]
+    depends_on:
+      - resourcemanager
+      - nodemanager
+    ports:
+      - 9870:9870
+    environment:
+      <<: *hadoop_env
+      ENSURE_NAMENODE_DIR: "/tmp/hadoop-root/dfs/name"
+    networks:
+      - kafka-network
+    volumes:
+      - hadoop:/home/
+    restart: on-failure
+
+  datanode:
+    image: apache/hadoop:3
+    command: ["hdfs", "datanode"]
+    depends_on:
+      - namenode
+    environment: *hadoop_env
+    networks:
+      - kafka-network
+    volumes:
+      - hadoop:/home/
+    restart: on-failure
+
+  resourcemanager:
+    image: apache/hadoop:3
+    hostname: resourcemanager
+    command: ["yarn", "resourcemanager"]
+    ports:
+      - 8088:8088
+    environment: *hadoop_env
+    volumes:
+      - ./test.sh:/opt/test.sh
+    networks:
+      - kafka-network
+    restart: on-failure
+
+  nodemanager:
+    image: apache/hadoop:3
+    hostname: nodemanager
+    command: ["yarn", "nodemanager"]
+    environment: *hadoop_env
+    networks:
+      - kafka-network
+    volumes:
+      - hadoop:/home/
+    restart: on-failure
+
+  zookeeper:
+    container_name: zookeeper1
+    image: confluentinc/cp-zookeeper:5.0.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    networks:
+      - kafka-network
+    volumes:
+      - hadoop:/home/
+    restart: on-failure
+
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    ports:
+      - 8080:8080
+    environment:
+      KAFKA_CLUSTERS_0_NAME: kafka
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      DYNAMIC_CONFIG_ENABLED: 'true'
+    networks:
+      - kafka-network
+
+  kafka:
+    hostname: kafka
+    container_name: kafka
+    image: confluentinc/cp-kafka:5.0.0
+    depends_on:
+      - zookeeper
+    networks:
+      - kafka-network
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      - hadoop:/home/
+    restart: on-failure
+
+  producer:
+    container_name: producer
+    build: ./docker/producer
+    volumes:
+      - .:/code
+    depends_on:
+      - kafka
+    networks:
+      - kafka-network
+    restart: on-failure
+
+  consumer:
+    container_name: consumer
+    build: ./docker/consumer
+    volumes:
+      - .:/code
+    depends_on:
+      - kafka
+    networks:
+      - kafka-network
+    restart: on-failure
+
+networks:
+  kafka-network:
+    external: true
+
+volumes:
+  hadoop:
